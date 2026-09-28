@@ -10380,7 +10380,8 @@ class TimelineEditor {
       filtered.forEach((s, idx) => {
         const item = document.createElement("div");
         item.className = "mmxd-autocomplete-item" + (idx === activeIndex ? " active" : "");
-        item.innerHTML = `<span>${s.tag}</span><small>${s.label}</small>`;
+        // the label is a slot description, which arrives with any workflow that is loaded
+        item.innerHTML = `<span>${escapeAttr(s.tag)}</span><small>${escapeAttr(s.label)}</small>`;
         item.addEventListener("mousedown", (e) => { e.preventDefault(); insertSuggestion(s.tag); });
         menu.appendChild(item);
       });
@@ -11207,7 +11208,7 @@ class TimelineEditor {
       openImgBtn.onclick = () => {
         const win = window.open();
         if (win) {
-          win.document.write(`<body style="margin:0;display:flex;justify-content:center;align-items:center;background:#0e0e0e;height:100vh;"><img style="max-width:100%;max-height:100%;" src="${seg.imageB64}" /></body>`);
+          win.document.write(`<body style="margin:0;display:flex;justify-content:center;align-items:center;background:#0e0e0e;height:100vh;"><img style="max-width:100%;max-height:100%;" src="${escapeAttr(seg.imageB64)}" /></body>`);
           win.document.close();
         }
         this.dismissContextMenu();
@@ -12696,7 +12697,7 @@ class TimelineEditor {
     const refreshProviderRows = () => {
       const prov = this.timeline.analyzeProvider || "ollama";
       const defs = PROVIDER_DEFAULTS[prov] || PROVIDER_DEFAULTS.ollama;
-      urlInput.placeholder = defs.url || "http://your-server:port";
+      urlInput.placeholder = defs.url || "http://127.0.0.1:port";
       modelInput.placeholder = defs.model || "your-loaded-model-name";
       urlInput.value = this.timeline.analyzeBaseUrl || "";
       modelInput.value = this.timeline.analyzeModel || "";
@@ -12738,7 +12739,7 @@ class TimelineEditor {
     provNote.style.color = "#777";
     provNote.style.padding = "2px 4px 0";
     provNote.style.lineHeight = "1.3";
-    provNote.textContent = "Off = type descriptions by hand. LM Studio / Custom: hard VRAM eviction depends on your server version; set a short JIT/auto-unload TTL there if it doesn't release. An API key is saved in ComfyUI's settings, not in the workflow — or leave it empty and set MINIMAX_DIRECTOR_VLM_API_KEY in the environment.";
+    provNote.textContent = "Off = type descriptions by hand. Only servers on this machine (localhost / 127.0.0.1 / ::1) are accepted; any other address is refused. LM Studio / Custom: hard VRAM eviction depends on your server version; set a short JIT/auto-unload TTL there if it doesn't release. An API key is saved in ComfyUI's settings, not in the workflow — or leave it empty and set MINIMAX_DIRECTOR_VLM_API_KEY in the environment.";
     menu.appendChild(provNote);
 
     refreshProviderRows();
@@ -13254,8 +13255,8 @@ app.registerExtension({
       id: ANALYZE_KEY_SETTING,
       category: ["MiniMax H3 Director", "Analyze", "API key"],
       name: "Analyze API key",
-      tooltip: "Bearer token for a cloud OpenAI-compatible endpoint used by the Analyze "
-             + "button. Stored in your ComfyUI user settings, never in a workflow. Leave "
+      tooltip: "Bearer token for a local OpenAI-compatible server that requires one, used "
+             + "by the Analyze button. Only servers on this machine are ever contacted. Stored in your ComfyUI user settings, never in a workflow. Leave "
              + "empty to use the MINIMAX_DIRECTOR_VLM_API_KEY or OPENAI_API_KEY "
              + "environment variable instead.",
       type: "text",

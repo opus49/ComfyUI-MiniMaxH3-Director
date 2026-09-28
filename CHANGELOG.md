@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased — security hardening
+
+- **The vision model is only ever reached on this machine.** Analyze, Enhance Prompt and
+  the VRAM unload call now refuse any address that is not `localhost`, `127.0.0.1` or
+  `::1`. The address used to be free text, including inside a shared workflow, so a
+  workflow could point it at any host and send it the reference images plus an API key
+  read from any environment variable the workflow named. Environment proxies are ignored
+  and redirects are not followed.
+- **File names from the browser or a workflow can no longer leave `ComfyUI/input`.** A
+  `../` or absolute path let the audio, probe and file-check routes read, probe or write
+  (the extracted `.wav`) files anywhere on disk.
+- **Two HTML-injection holes in the editor are closed**: the `@ref` autocomplete rendered a
+  slot description as HTML, and "Open Image in New Tab" wrote an unescaped image source.
+  Both values arrive with any loaded workflow.
+
 ## 0.2.2
 
 Two contributions from [@Brioch](https://github.com/Brioch) — [#16] and [#17], closing

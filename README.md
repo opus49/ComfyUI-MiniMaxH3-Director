@@ -644,10 +644,17 @@ To use it, point the gear menu's provider row at a vision model:
 |---|---|---|
 | Ollama | `http://127.0.0.1:11434` | `ollama pull qwen2.5vl:7b` — any vision model works, the field is free text |
 | LM Studio | `http://127.0.0.1:1234` | load a vision model, start the local server |
-| Custom | — | any OpenAI-compatible `/v1/chat/completions` endpoint, local or hosted |
+| Custom | — | any OpenAI-compatible `/v1/chat/completions` endpoint on this machine |
 
-**Using a hosted endpoint.** Pick **Custom**, enter its base URL and model name, and put
-the key in the **API key** row that appears. Two things about where that key is kept:
+**Local only.** Whatever the provider, the address must be `localhost`, `127.0.0.1` or
+`::1`. Anything else — a LAN box, a hosted API, a URL saved inside someone else's
+workflow — is refused before a connection is made, so reference images and API keys never
+leave the machine. Environment proxies are ignored and redirects are not followed, for
+the same reason.
+
+**Using an API key.** If your local server wants one, pick **Custom**, enter its base URL
+and model name, and put the key in the **API key** row that appears. Two things about where
+that key is kept:
 
 * it goes into **ComfyUI's own user settings** (`user/<name>/comfy.settings.json`), which
   stay on your machine — *not* into the timeline, which is serialised into the workflow

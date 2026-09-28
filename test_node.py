@@ -184,6 +184,44 @@ for var in ("MMXD_TEST_KEY", "OPENAI_API_KEY", "MINIMAX_DIRECTOR_VLM_API_KEY"):
 # values are serialised into the workflow. Guard the shape it passes in.
 check("an empty widget resolves to no key", key({"api_key_env": ""}), "")
 
+# ------------------------------------------------------------- loopback-only VLM
+# The VLM address can come from a shared workflow, and whatever it names receives the
+# images and any API key. Only this machine may be contacted.
+lb = media.require_loopback
+check("127.0.0.1 is kept", lb("http://127.0.0.1:11434"), "http://127.0.0.1:11434")
+check("localhost is pinned to 127.0.0.1", lb("http://localhost:1234/"), "http://127.0.0.1:1234")
+check("the rest of 127/8 is loopback too", lb("http://127.0.0.2:80"), "http://127.0.0.2:80")
+check("IPv6 loopback", lb("http://[::1]:8080"), "http://[::1]:8080")
+check("a plain path survives", lb("http://127.0.0.1:8080/llm/"), "http://127.0.0.1:8080/llm")
+check("normalize + loopback on a bare host:port",
+      lb(media.normalize_base_url("127.0.0.1:11434")), "http://127.0.0.1:11434")
+for bad in ("http://example.com", "https://api.openai.com", "http://192.168.1.5:11434",
+            "http://10.0.0.1", "http://0.0.0.0:11434", "http://127.0.0.1.evil.com",
+            "http://127.0.0.1@evil.com", "http://evil.com#@127.0.0.1",
+            "http://user:pw@127.0.0.1", "ftp://127.0.0.1", "file:///etc/passwd",
+            "http://127.0.0.1:99999", "http://127.0.0.1/a\\@evil.com", "http://2130706433"):
+    check_raises("refused: %s" % bad, lambda b=bad: lb(b), "")
+
+# -------------------------------------------------------- input path confinement
+import tempfile
+_orig_input_dir = media.folder_paths.get_input_directory
+with tempfile.TemporaryDirectory() as _root:
+    _inp = os.path.join(_root, "input")
+    os.makedirs(os.path.join(_inp, "whatdreamscost"))
+    with open(os.path.join(_inp, "clip.wav"), "wb") as _f:
+        _f.write(b"x")
+    with open(os.path.join(_root, "secret.txt"), "wb") as _f:
+        _f.write(b"x")
+    media.folder_paths.get_input_directory = lambda: _inp
+    try:
+        check("a file in input resolves", media.resolve_input_path("clip.wav"),
+              os.path.join(_inp, "clip.wav"))
+        check("../ cannot leave input", media.resolve_input_path("../secret.txt"), None)
+        check("an absolute path cannot leave input",
+              media.resolve_input_path(os.path.join(_root, "secret.txt")), None)
+    finally:
+        media.folder_paths.get_input_directory = _orig_input_dir
+
 # -------------------------------------------------------- Save Last Frame node
 # It sits mid-chain after VAEDecode, so the two things that must hold are that the batch
 # comes out untouched and that exactly one file is written — the last frame, whatever the

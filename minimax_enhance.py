@@ -404,7 +404,9 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
                                 tooltip="Empty = the provider's default (Ollama "
                                         "http://127.0.0.1:11434, LM Studio "
                                         "http://127.0.0.1:1234). http:// is added if you "
-                                        "leave it off. No path — just host and port."),
+                                        "leave it off. No path — just host and port. Must "
+                                        "be on this machine (localhost / 127.0.0.1 / ::1); "
+                                        "any other address is refused."),
                 io.String.Input("model", default="", optional=True,
                                 tooltip="Model name. Must be a VISION model — a text-only model "
                                         "will ignore your images without saying so. Empty falls "
@@ -443,7 +445,8 @@ class MiniMaxH3EnhancePrompt(io.ComfyNode):
                 # input in workflows already saved (see MAINTAINING, trap 9).
                 io.String.Input("api_key_env", default="", optional=True,
                                 tooltip="Name of an ENVIRONMENT VARIABLE holding the API key "
-                                        "for a cloud endpoint — not the key itself. Widget "
+                                        "for a local server that requires one — not the key "
+                                        "itself. Widget "
                                         "values are saved inside the workflow, so a key typed "
                                         "here would travel with every copy you share. Empty "
                                         "falls back to MINIMAX_DIRECTOR_VLM_API_KEY, then "

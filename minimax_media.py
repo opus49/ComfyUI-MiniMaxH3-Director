@@ -13,13 +13,16 @@ either Director are then visible to both.
 import asyncio
 import base64
 import io as _io
+import ipaddress
 import json
 import logging
 import math
 import os
 import platform
+import re
 import subprocess
 import wave
+from urllib.parse import urlsplit
 
 import av
 import numpy as np
@@ -41,6 +44,18 @@ AUDIO_SR = 44100
 # path helpers
 # --------------------------------------------------------------------------------------
 
+def is_inside(path, root):
+    """True when `path` resolves (symlinks included) to somewhere under `root`.
+
+    Every file name reaching this module comes from a browser request or a workflow, and
+    either can carry `../` or an absolute path. Without this, the HTTP routes below would
+    probe, read and write files anywhere on disk.
+    """
+    root = os.path.realpath(root)
+    target = os.path.realpath(path)
+    return target == root or target.startswith(root.rstrip(os.sep) + os.sep)
+
+
 def resolve_input_path(rel_name: str):
     """Resolve a timeline file reference to an absolute path inside ComfyUI/input."""
     if not rel_name:
@@ -52,7 +67,7 @@ def resolve_input_path(rel_name: str):
         os.path.join(input_dir, os.path.basename(rel_name)),
     ]
     for path in candidates:
-        if os.path.exists(path) and os.path.isfile(path):
+        if is_inside(path, input_dir) and os.path.isfile(path):
             return path
     return None
 
@@ -162,7 +177,7 @@ async def minimax_director_check_file(request):
     temp_dir = os.path.join(upload_dir, WORKSPACE_SUBDIR)
 
     def _matches(path):
-        if not (os.path.exists(path) and os.path.isfile(path)):
+        if not (is_inside(path, upload_dir) and os.path.isfile(path)):
             return False
         if not file_size:
             return True
@@ -415,7 +430,7 @@ async def minimax_director_upload_chunk(request):
     os.makedirs(upload_dir, exist_ok=True)
     file_path = os.path.join(upload_dir, filename)
 
-    if not os.path.realpath(file_path).startswith(os.path.realpath(upload_dir)):
+    if not filename or not is_inside(file_path, upload_dir):
         return web.json_response({"error": "Invalid filename"}, status=400)
 
     loop = asyncio.get_event_loop()
@@ -497,6 +512,54 @@ def normalize_base_url(url, fallback=""):
     if "://" not in url:
         url = "http://" + url
     return url
+
+
+_SAFE_URL_PATH = re.compile(r"[A-Za-z0-9._~/-]*")
+
+
+def require_loopback(url):
+    """Return `url` rebuilt to point at this machine, or raise VLMError.
+
+    The VLM address is free text from the gear menu, a node widget, or a workflow someone
+    else saved — and whatever it names receives the reference images plus any API key.
+    So only a loopback address is ever contacted. The URL is rebuilt from its parsed
+    parts with the host as an IP literal ("localhost" becomes 127.0.0.1), so no DNS
+    lookup happens and no second parser can read a different host out of the string.
+    """
+    try:
+        parts = urlsplit(url or "")
+        port = parts.port
+    except ValueError as e:
+        raise VLMError("'%s' is not a usable address: %s" % (url, e))
+    if parts.scheme not in ("http", "https"):
+        raise VLMError("'%s' is not an http(s) address." % url)
+    if parts.username or parts.password:
+        raise VLMError("'%s' carries credentials in the address; that is not accepted." % url)
+    host = (parts.hostname or "").lower()
+    if host == "localhost":
+        ip = ipaddress.ip_address("127.0.0.1")
+    else:
+        try:
+            ip = ipaddress.ip_address(host)
+        except ValueError:
+            ip = None
+    if ip is None or not ip.is_loopback:
+        raise VLMError("'%s' is not on this machine. Only localhost / 127.0.0.1 / ::1 are "
+                       "allowed, so nothing is ever sent to another computer." % url)
+    path = parts.path.rstrip("/")
+    if not _SAFE_URL_PATH.fullmatch(path):
+        raise VLMError("'%s' has characters in its path that are not accepted." % url)
+    netloc = ("[%s]" % ip) if ip.version == 6 else str(ip)
+    if port:
+        netloc += ":%d" % port
+    return "%s://%s%s" % (parts.scheme, netloc, path)
+
+
+def _client_session(headers):
+    # trust_env=False: never route through an HTTP(S)_PROXY from the environment, which
+    # would hand the request to another machine despite the loopback address.
+    import aiohttp
+    return aiohttp.ClientSession(headers=headers, trust_env=False)
 
 
 def _resolve_provider(data):
@@ -588,10 +651,11 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
         raise VLMError("No model name set for %s. Enter the name of the model you have "
                        "loaded there." % provider)
 
+    base_url = require_loopback(base_url)
     headers = _auth_headers(api_key)
 
     try:
-        async with aiohttp.ClientSession(headers=headers) as session:
+        async with _client_session(headers) as session:
             if provider == "ollama":
                 payload = {"model": model, "prompt": prompt, "images": images_b64,
                            "stream": False, "keep_alive": keep_alive,
@@ -604,7 +668,7 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
                     # asking for a word count in the prompt does not
                     payload["options"] = {"num_predict": int(max_tokens)}
                 async with session.post("%s/api/generate" % base_url, json=payload,
-                                        timeout=timeout) as response:
+                                        timeout=timeout, allow_redirects=False) as response:
                     if response.status != 200:
                         raise VLMError("Ollama HTTP %s: %s" % (response.status, await response.text()))
                     body = await response.json()
@@ -623,7 +687,7 @@ async def vlm_generate(images_b64, prompt, provider, base_url, model,
                            "max_tokens": int(max_tokens) if max_tokens else 2048,
                            "stream": False}
                 async with session.post("%s/v1/chat/completions" % base_url, json=payload,
-                                        timeout=timeout) as response:
+                                        timeout=timeout, allow_redirects=False) as response:
                     if response.status in (401, 403):
                         # the one HTTP status worth naming: the fix is somewhere else
                         # entirely, and the endpoint's own body rarely says where
@@ -726,14 +790,19 @@ async def unload_model(provider, base_url, model, api_key=None):
     except Exception:
         return False
 
+    try:
+        base_url = require_loopback(base_url)
+    except VLMError as e:
+        log.warning("[MiniMaxDirector] not asking to unload '%s': %s", model, e)
+        return False
     headers = _auth_headers(api_key)
 
     if provider == "ollama":
         try:
-            async with aiohttp.ClientSession(headers=headers) as session:
+            async with _client_session(headers) as session:
                 async with session.post("%s/api/generate" % base_url,
                                         json={"model": model, "keep_alive": 0},
-                                        timeout=10) as response:
+                                        timeout=10, allow_redirects=False) as response:
                     await response.text()
             log.info("[MiniMaxDirector] asked Ollama to release '%s'.", model)
             return True
@@ -744,9 +813,9 @@ async def unload_model(provider, base_url, model, api_key=None):
     # Anything else: try the llama.cpp router, and say plainly when it is not there rather
     # than leaving a checkbox that quietly does nothing (issue #9).
     try:
-        async with aiohttp.ClientSession(headers=headers) as session:
-            async with session.post("%s/models/unload" % base_url,
-                                    json={"model": model}, timeout=10) as response:
+        async with _client_session(headers) as session:
+            async with session.post("%s/models/unload" % base_url, json={"model": model},
+                                    timeout=10, allow_redirects=False) as response:
                 body = await response.text()
                 if response.status < 400:
                     log.info("[MiniMaxDirector] asked the llama.cpp router to unload '%s'.",
@@ -812,8 +881,9 @@ def load_image_source(b64_or_url: str, filename: str = None) -> torch.Tensor:
             fname = q.get("filename", [None])[0]
             subfolder = q.get("subfolder", [""])[0]
             if fname:
-                path = os.path.join(folder_paths.get_input_directory(), subfolder, fname)
-                if os.path.exists(path):
+                input_dir = folder_paths.get_input_directory()
+                path = os.path.join(input_dir, subfolder, fname)
+                if is_inside(path, input_dir) and os.path.isfile(path):
                     return _pil_to_tensor(Image.open(path))
         except Exception as e:
             log.debug("[MiniMaxDirector] URL parsing failed for %s: %s", b64_or_url, e)
